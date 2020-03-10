@@ -251,6 +251,11 @@ static int stm32x_otp_enable(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
+static void report_flash_progress(const char *op, uint64_t region_start, uint64_t region_end, const char *block_name)
+{
+	LOG_INFO("%s:0x%llx|0x%llx|%s", op, (long long unsigned int)region_start, (long long unsigned int)region_end, block_name);
+}
+
 /* flash bank stm32x <base> <size> 0 0 <target#>
  */
 FLASH_BANK_COMMAND_HANDLER(stm32x_flash_bank_command)
@@ -649,6 +654,9 @@ static int stm32x_erase(struct flash_bank *bank, int first, int last)
 		if (retval != ERROR_OK)
 			return retval;
 
+		if (target->report_flash_progress)
+			report_flash_progress("flash_erase_progress", bank->base + bank->sectors[i].offset, bank->base + bank->sectors[i].offset + bank->sectors[i].size, bank->name);
+
 		bank->sectors[i].is_erased = 1;
 	}
 
@@ -760,12 +768,18 @@ static int stm32x_write_block(struct flash_bank *bank, const uint8_t *buffer,
 	buf_set_u32(reg_params[3].value, 0, 32, count);
 	buf_set_u32(reg_params[4].value, 0, 32, STM32_FLASH_BASE);
 
+	if (target->report_flash_progress)
+		report_flash_progress("flash_write_start", address, address + count * 2, bank->name);
+
 	retval = target_run_flash_async_algorithm(target, buffer, count, 2,
 			0, NULL,
 			5, reg_params,
 			source->address, source->size,
 			write_algorithm->address, 0,
 			&armv7m_info);
+    
+    if (target->report_flash_progress)
+        LOG_INFO("flash_write_done:%s", bank->name);
 
 	if (retval == ERROR_FLASH_OPERATION_FAILED) {
 		LOG_ERROR("error executing stm32x flash write algorithm");

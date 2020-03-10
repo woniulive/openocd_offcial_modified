@@ -181,26 +181,8 @@ struct stm32l4_flash_bank {
 	int family;
 };
 
-/* flash bank stm32l4x <base> <size> 0 0 <target#>
+/* flash bank stm32l5x <base> <size> 0 0 <target#>
  */
-
-FLASH_BANK_COMMAND_HANDLER(stm32l4_flash_bank_command)
-{
-	struct stm32l4_flash_bank *stm32l4_info;
-
-	if (CMD_ARGC < 6)
-		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	stm32l4_info = malloc(sizeof(struct stm32l4_flash_bank));
-	if (!stm32l4_info)
-		return ERROR_FAIL; /* Checkme: What better error to use?*/
-	bank->driver_priv = stm32l4_info;
-
-	stm32l4_info->probed = 0;
-	stm32l4_info->family = STM32_FAMILY_L4;
-
-	return ERROR_OK;
-}
 
 FLASH_BANK_COMMAND_HANDLER(stm32l5_flash_bank_command)
 {

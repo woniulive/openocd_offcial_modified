@@ -402,7 +402,7 @@ static uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
 {
 	struct scan_field field;
 	uint8_t in_value[4];
-	uint8_t out_value[4] = { 0 };
+	uint8_t out_value[4];
 
 	buf_set_u32(out_value, 0, 32, out);
 

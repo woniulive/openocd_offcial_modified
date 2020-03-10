@@ -36,6 +36,7 @@ extern struct rtos_type chromium_ec_rtos;
 extern struct rtos_type embKernel_rtos;
 extern struct rtos_type mqx_rtos;
 extern struct rtos_type uCOS_III_rtos;
+extern struct rtos_type multicore_rtos;
 extern struct rtos_type nuttx_rtos;
 extern struct rtos_type hwthread_rtos;
 
@@ -50,6 +51,7 @@ static struct rtos_type *rtos_types[] = {
 	&mqx_rtos,
 	&uCOS_III_rtos,
 	&nuttx_rtos,
+	&multicore_rtos,
 	&hwthread_rtos,
 	NULL
 };

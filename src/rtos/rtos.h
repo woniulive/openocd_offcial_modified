@@ -82,6 +82,7 @@ struct rtos_type {
 	int (*clean)(struct target *target);
 	char * (*ps_command)(struct target *target);
 	int (*set_reg)(struct rtos *rtos, uint32_t reg_num, uint8_t *reg_value);
+    int (*step_hook)(struct target *target, int current, uint32_t address, int handle_breakpoints);
 };
 
 struct stack_register_offset {

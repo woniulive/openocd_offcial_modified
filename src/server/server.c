@@ -573,8 +573,8 @@ int server_loop(struct command_context *command_context)
 								shutdown_openocd = SHUTDOWN_REQUESTED;
 							}
 							remove_connection(service, c);
-							LOG_INFO("dropped '%s' connection",
-								service->name);
+							LOG_INFO("dropped '%s' connection (error %d)",
+								service->name, retval);
 							c = next;
 							continue;
 						}

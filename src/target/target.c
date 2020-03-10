@@ -946,6 +946,7 @@ int target_run_flash_async_algorithm(struct target *target,
 	int timeout = 0;
 
 	const uint8_t *buffer_orig = buffer;
+    uint32_t count_orig = count;
 
 	/* Set up working area. First word is write pointer, second word is read pointer,
 	 * rest is fifo data area. */
@@ -978,6 +979,9 @@ int target_run_flash_async_algorithm(struct target *target,
 		LOG_ERROR("error starting target flash write algorithm");
 		return retval;
 	}
+    
+    if (target->report_flash_progress)
+        LOG_INFO("flash_write_progress_async_start:0x%x", block_size * count_orig);
 
 	while (count > 0) {
 
@@ -989,7 +993,7 @@ int target_run_flash_async_algorithm(struct target *target,
 
 		LOG_DEBUG("offs 0x%zx count 0x%" PRIx32 " wp 0x%" PRIx32 " rp 0x%" PRIx32,
 			(size_t) (buffer - buffer_orig), count, wp, rp);
-
+    	
 		if (rp == 0) {
 			LOG_ERROR("flash write algorithm aborted by target");
 			retval = ERROR_FLASH_OPERATION_FAILED;
@@ -1051,6 +1055,9 @@ int target_run_flash_async_algorithm(struct target *target,
 		retval = target_write_u32(target, wp_addr, wp);
 		if (retval != ERROR_OK)
 			break;
+    	
+    	if (target->report_flash_progress)
+    	    LOG_INFO("flash_write_progress_async:0x%x|0x%x", (unsigned int)(buffer - buffer_orig), block_size * count_orig);
 
 		/* Avoid GDB timeouts */
 		keep_alive();
@@ -1251,6 +1258,9 @@ bool target_supports_gdb_connection(struct target *target)
 int target_step(struct target *target,
 		int current, target_addr_t address, int handle_breakpoints)
 {
+    if (target->rtos && target->rtos->type->step_hook && target->rtos->type->step_hook(target, current, address, handle_breakpoints) == ERROR_OK)
+        return ERROR_OK;
+    
 	return target->type->step(target, current, address, handle_breakpoints);
 }
 
@@ -2915,7 +2925,7 @@ COMMAND_HANDLER(handle_reg_command)
 
 		if (!reg)
 			goto not_found;
-	}
+		}
 
 	assert(reg != NULL); /* give clang a hint that we *know* reg is != NULL here */
 
@@ -3035,7 +3045,7 @@ int target_wait_state(struct target *target, enum target_state state, int ms)
 		if (cur-then > 500)
 			keep_alive();
 
-		if ((cur-then) > ms) {
+		if (ms >= 0 && ((cur-then) > ms)) {
 			LOG_ERROR("timed out while waiting for target %s",
 				Jim_Nvp_value2name_simple(nvp_target_state, state)->name);
 			return ERROR_FAIL;
@@ -3255,8 +3265,12 @@ COMMAND_HANDLER(handle_md_command)
 
 	struct target *target = get_current_target(CMD_CTX);
 	int retval = fn(target, address, size, count, buffer);
-	if (ERROR_OK == retval)
+    if (ERROR_OK == retval)
 		target_handle_md_output(CMD, target, address, size, count, buffer);
+    else
+    {
+        command_print(cmd, "0x%08x: ERROR %d", (unsigned int)address, retval);
+    }
 
 	free(buffer);
 
@@ -4560,7 +4574,11 @@ void target_handle_event(struct target *target, enum target_event e)
 			struct command_context *cmd_ctx = current_command_context(teap->interp);
 			struct target *saved_target_override = cmd_ctx->current_target_override;
 			cmd_ctx->current_target_override = target;
-			retval = Jim_EvalObj(teap->interp, teap->body);
+
+			if ((teap->event == TARGET_EVENT_GDB_FLASH_ERASE_START || teap->event == TARGET_EVENT_GDB_FLASH_WRITE_END) && target->first_reset)
+				retval = JIM_OK;
+			else 
+				retval = Jim_EvalObj(teap->interp, teap->body);
 
 			if (retval == JIM_RETURN)
 				retval = teap->interp->returnCode;
@@ -5687,6 +5705,64 @@ static int jim_target_smp(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 	return retval;
 }
 
+static int jim_target_amp(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
+{
+	int i;
+	const char *targetname;
+	int retval, len;
+	struct target *target = (struct target *)NULL;
+	struct target_list *head, *curr, *new;
+	curr = (struct target_list *)NULL;
+	head = (struct target_list *)NULL;
+
+	retval = 0;
+	LOG_DEBUG("%d", argc);
+	/* argv[1] = target to associate in amp
+	 * argv[2] = target to assoicate in amp
+	 * argv[3] ...
+	 */
+
+	for (i = 1; i < argc; i++)
+	{
+
+		targetname = Jim_GetString(argv[i], &len);
+		target = get_target(targetname);
+		LOG_DEBUG("%s ", targetname);
+		if (target)
+		{
+			new = malloc(sizeof(struct target_list));
+			new->target = target;
+			new->next = (struct target_list *)NULL;
+			if (head == (struct target_list *)NULL)
+			{
+				head = new;
+				curr = head;
+			}
+			else
+			{
+				curr->next = new;
+				curr = new;
+			}
+		}
+	}
+	/*  now parse the list of cpu and put the target in smp mode*/
+	curr = head;
+
+	while (curr != (struct target_list *)NULL)
+	{
+		target = curr->target;
+		/* in this case, the amp must be set before */
+		target->amp = 1;
+		target->smp = 0;
+		target->head = head;
+		curr = curr->next;
+	}
+
+	if (target && target->rtos && !target->amp)
+		retval = rtos_smp_init(head->target);
+
+	return retval;
+}
 
 static int jim_target_create(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 {
@@ -5740,6 +5816,13 @@ static const struct command_registration target_subcommand_handlers[] = {
 		.jim_handler = jim_target_smp,
 		.usage = "targetname1 targetname2 ...",
 		.help = "gather several target in a smp list"
+	},
+	{
+		.name = "amp",
+		.mode = COMMAND_ANY,
+		.jim_handler = jim_target_amp,
+		.usage = "targetname1 targetname2 ...",
+		.help = "gather several target in an amp list"
 	},
 
 	COMMAND_REGISTRATION_DONE
@@ -5967,6 +6050,68 @@ static void binprint(struct command_invocation *cmd, const char *text, const uin
 		command_print_sameline(cmd, " %02x", buf[i]);
 	command_print(cmd, " ");
 }
+    
+#include <flash/nor/imp.h>
+
+COMMAND_HANDLER(handle_report_flash_progress)
+{
+    struct target *target = get_current_target(CMD_CTX);
+    if (CMD_ARGC == 1)
+    {
+        int new_val = 0;
+        COMMAND_PARSE_ON_OFF(CMD_ARGV[0], new_val);
+        target->report_flash_progress = new_val;
+        
+        if (new_val)
+        {
+            for (struct flash_bank *bank = flash_bank_list(); bank; bank = bank->next)
+            {
+				int r = bank->driver->probe(bank);
+                if (r != ERROR_OK)
+					LOG_ERROR("FLASH bank probe failed for %s", bank->name);
+
+				command_print(cmd, "flash_bank_summary:0x%x|0x%x|%s", (uint32_t)bank->base, (uint32_t)bank->size, bank->name);
+            }
+        }
+    }
+    command_print(cmd, "FLASH progress reporting is now %s\n", target->report_flash_progress ? "on" : "off");
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(handle_run_until_stop_fast)
+{
+    int timeout = 5000;
+    if (CMD_ARGC == 1)
+    {
+        COMMAND_PARSE_NUMBER(s32, CMD_ARGV[0], timeout);
+    }
+    struct target *target = get_current_target(CMD_CTX);
+    target_resume(target, 1, 0, 1, 0);
+    if (target_wait_state(target, TARGET_HALTED, timeout) == ERROR_OK)
+    {
+        command_print(cmd, "Target successfully stopped");
+    }
+    else
+        target_halt(target);
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(handle_wait_for_stop)
+{
+    int timeout = 5000;
+    if (CMD_ARGC == 1)
+    {
+        COMMAND_PARSE_NUMBER(s32, CMD_ARGV[0], timeout);
+    }
+    struct target *target = get_current_target(CMD_CTX);
+    if (target_wait_state(target, TARGET_HALTED, timeout) == ERROR_OK)
+        command_print(cmd, "Target successfully stopped");
+	else
+        command_print(cmd, "Target did not halt within %d msec", timeout);
+	
+    return ERROR_OK;
+}
+    
 
 COMMAND_HANDLER(handle_test_mem_access_command)
 {
@@ -6397,6 +6542,27 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.help = "Test the target's memory access functions",
 		.usage = "size",
 	},
+    {
+        .name = "report_flash_progress",
+        .handler = handle_report_flash_progress,
+        .mode = COMMAND_EXEC,
+        .help = "Enables/disables reporting FLASH programming progress",
+        .usage = "[on/off]",
+    },
+    {
+        .name = "run_until_stop_fast",
+        .handler = handle_run_until_stop_fast,
+        .mode = COMMAND_EXEC,
+        .help = "Runs the target until a stop occurs",
+        .usage = "[timeout]",
+    },
+    {
+        .name = "wait_for_stop",
+        .handler = handle_wait_for_stop,
+        .mode = COMMAND_EXEC,
+        .help = "Waits for the target to stop",
+        .usage = "[timeout]",
+    },
 
 	COMMAND_REGISTRATION_DONE
 };

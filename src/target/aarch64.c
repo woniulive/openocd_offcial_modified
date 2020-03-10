@@ -131,6 +131,9 @@ static int aarch64_mmu_modify(struct target *target, int enable)
 	struct armv8_common *armv8 = &aarch64->armv8_common;
 	int retval = ERROR_OK;
 	uint32_t instr = 0;
+    
+    if (enable && !aarch64->mmu_ever_disabled)
+        return ERROR_OK;   //MMU disabling code below won't work for in 32-bit mode, so we don't try doing it unless it was explicitly disabled.
 
 	if (enable) {
 		/*	if mmu enabled at target stop and mmu not enable */
@@ -183,6 +186,10 @@ static int aarch64_mmu_modify(struct target *target, int enable)
 
 	retval = armv8->dpm.instr_write_data_r0(&armv8->dpm, instr,
 				aarch64->system_control_reg_curr);
+    
+    if (retval == ERROR_OK && !enable)
+        aarch64->mmu_ever_disabled = true;
+    
 	return retval;
 }
 
@@ -457,6 +464,11 @@ static int update_halt_gdb(struct target *target, enum target_debug_reason debug
 	struct target *gdb_target = NULL;
 	struct target_list *head;
 	struct target *curr;
+    
+    if (target->gdb_service) 
+    {
+        target->gdb_service->target = target;
+    }
 
 	if (debug_reason == DBG_REASON_NOTHALTED) {
 		LOG_DEBUG("Halting remaining targets in SMP group");
@@ -2036,6 +2048,21 @@ static int aarch64_read_cpu_memory(struct target *target,
 		LOG_WARNING("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
+    
+    if (arm->core_state != ARM_STATE_AARCH64 && !(size == 4 && (address % 4) == 0)) 
+    {
+        target_addr_t alignedAddr = address & ~3;
+        int delta = (int)(address - alignedAddr);
+        int wordCount = ((size * count) + delta + 3) / 4;
+        uint8_t *pTmp = (uint8_t *)malloc(wordCount * 4);
+        int r = aarch64_read_cpu_memory(target, alignedAddr, 4, wordCount, pTmp);
+        if (r == (0l))
+        {
+            memcpy(buffer, pTmp + delta, size * count);
+        }
+        free(pTmp);
+        return r;
+    }
 
 	/* Mark register X0 as dirty, as it will be used
 	 * for transferring the data.

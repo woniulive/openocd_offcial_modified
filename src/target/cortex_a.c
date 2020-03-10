@@ -942,8 +942,7 @@ static int cortex_a_restore_smp(struct target *target, int handle_breakpoints)
 	while (head != (struct target_list *)NULL) {
 		curr = head->target;
 		if ((curr != target) && (curr->state != TARGET_RUNNING)
-			&& target_was_examined(curr)) {
-			/*  resume current address , not in step mode */
+				&& target_was_examined(curr) && !curr->frozen) {			/*  resume current address , not in step mode */
 			retval += cortex_a_internal_restore(curr, 1, &address,
 					handle_breakpoints, 0);
 			retval += cortex_a_internal_restart(curr);
@@ -1033,9 +1032,9 @@ static int cortex_a_debug_entry(struct target *target)
 	}
 
 	/* First load register accessible through core debug port */
-	retval = arm_dpm_read_current_registers(&armv7a->dpm);
-	if (retval != ERROR_OK)
-		return retval;
+		retval = arm_dpm_read_current_registers(&armv7a->dpm);
+		if (retval != ERROR_OK)
+			return retval;
 
 	if (arm->spsr) {
 		/* read SPSR */
@@ -2977,8 +2976,8 @@ static int cortex_a_virt2phys(struct target *target,
 	}
 
 	/* mmu must be enable in order to get a correct translation */
-	retval = cortex_a_mmu_modify(target, 1);
-	if (retval != ERROR_OK)
+		retval = cortex_a_mmu_modify(target, 1);
+		if (retval != ERROR_OK)
 		return retval;
 	return armv7a_mmu_translate_va_pa(target, (uint32_t)virt,
 						    phys, 1);
@@ -3059,6 +3058,46 @@ COMMAND_HANDLER(handle_cortex_a_dacrfixup_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(handle_cortex_a_freeze_core_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+    int coreid = 0, delta = 0;
+
+    if (CMD_ARGC > 0) 
+    {
+    	COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], coreid);
+	}
+
+    if (CMD_ARGC > 1) 
+    {
+        COMMAND_PARSE_NUMBER(int, CMD_ARGV[1], delta);
+    }
+    
+    if (!target->smp)
+    {
+        command_print(cmd, "cortex_a core not in SMP mode");
+        return ERROR_COMMAND_ARGUMENT_INVALID;
+    }
+    
+    for (struct target_list *pLst = target->head; pLst; pLst = pLst->next)
+    {
+        struct target *pThisTarget = pLst->target;
+        if (!pThisTarget)
+            continue;
+        if (pThisTarget->coreid == coreid)
+        {
+            pThisTarget->frozen += delta;
+            if (pThisTarget->frozen < 0)
+                pThisTarget->frozen = 0;
+            command_print(cmd, "core #%d is now %s (freeze count = %d)", coreid, pThisTarget->frozen ? "frozen" : "unfrozen", pThisTarget->frozen);
+            return ERROR_OK;
+        }
+    }
+
+    command_print(cmd, "no such core: %d", coreid);
+    return ERROR_COMMAND_ARGUMENT_INVALID;
+}
+
 static const struct command_registration cortex_a_exec_command_handlers[] = {
 	{
 		.name = "cache_info",
@@ -3089,6 +3128,13 @@ static const struct command_registration cortex_a_exec_command_handlers[] = {
 			"on memory access",
 		.usage = "['on'|'off']",
 	},
+    {
+        .name = "freeze_core",
+        .handler = handle_cortex_a_freeze_core_command,
+        .mode = COMMAND_EXEC,
+        .help = "freeze or unfreeze a specified core in SMP mode",
+        .usage = "[core number] [freeze delta]",
+    },
 	{
 		.chain = armv7a_mmu_command_handlers,
 	},

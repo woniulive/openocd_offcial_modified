@@ -49,8 +49,7 @@ struct msp432_bank {
 	int family_type;
 	int device_type;
 	uint32_t sector_length;
-	bool probed_main;
-	bool probed_info;
+	bool probed[2];
 	bool unlock_bsl;
 	struct working_area *working_area;
 	struct armv7m_algorithm armv7m_info;
@@ -195,7 +194,8 @@ static int msp432_exec_cmd(struct target *target, struct msp432_algo_params
 		return retval;
 
 	/* Write out command to target memory */
-	retval = target_write_u32(target, ALGO_FLASH_COMMAND_ADDR, command);
+	retval = target_write_buffer(target, ALGO_FLASH_COMMAND_ADDR,
+				sizeof(command), (uint8_t *)&command);
 
 	return retval;
 }
@@ -210,7 +210,8 @@ static int msp432_wait_return_code(struct target *target)
 
 	start_ms = timeval_ms();
 	while ((0 == return_code) || (FLASH_BUSY == return_code)) {
-		retval = target_read_u32(target, ALGO_RETURN_CODE_ADDR, &return_code);
+		retval = target_read_buffer(target, ALGO_RETURN_CODE_ADDR,
+					sizeof(return_code), (uint8_t *)&return_code);
 		if (ERROR_OK != retval)
 			return retval;
 
@@ -252,7 +253,8 @@ static int msp432_wait_inactive(struct target *target, uint32_t buffer)
 
 	start_ms = timeval_ms();
 	while (BUFFER_INACTIVE != status_code) {
-		retval = target_read_u32(target, status_addr, &status_code);
+		retval = target_read_buffer(target, status_addr, sizeof(status_code),
+					(uint8_t *)&status_code);
 		if (ERROR_OK != retval)
 			return retval;
 
@@ -475,29 +477,25 @@ COMMAND_HANDLER(msp432_mass_erase_command)
 	struct flash_bank *bank;
 	struct msp432_bank *msp432_bank;
 	bool all;
-
 	int retval;
 
-	if (1 > CMD_ARGC)
-		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (retval != ERROR_OK)
-		return retval;
-
-	if (1 == CMD_ARGC) {
+	if (0 == CMD_ARGC) {
 		all = false;
-	} else if (2 == CMD_ARGC) {
+	} else if (1 == CMD_ARGC) {
 		/* Check argument for how much to erase */
-		if (0 == strcmp(CMD_ARGV[1], "main"))
+		if (0 == strcmp(CMD_ARGV[0], "main"))
 			all = false;
-		else if (0 == strcmp(CMD_ARGV[1], "all"))
+		else if (0 == strcmp(CMD_ARGV[0], "all"))
 			all = true;
 		else
 			return ERROR_COMMAND_SYNTAX_ERROR;
 	} else {
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
+
+	retval = get_flash_bank_by_num(0, &bank);
+	if (ERROR_OK != retval)
+		return retval;
 
 	msp432_bank = bank->driver_priv;
 
@@ -515,7 +513,7 @@ COMMAND_HANDLER(msp432_mass_erase_command)
 		LOG_INFO("msp432: Mass erase of flash is complete");
 	} else {
 		LOG_INFO("msp432: Mass erase of %s is complete",
-			all ? "main + information flash" : "main flash");
+			all ? "main + info flash" : "main flash");
 	}
 
 	return ERROR_OK;
@@ -525,14 +523,13 @@ COMMAND_HANDLER(msp432_bsl_command)
 {
 	struct flash_bank *bank;
 	struct msp432_bank *msp432_bank;
-
 	int retval;
 
-	if (1 > CMD_ARGC)
+	if (1 < CMD_ARGC)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (retval != ERROR_OK)
+	retval = get_flash_bank_by_num(0, &bank);
+	if (ERROR_OK != retval)
 		return retval;
 
 	msp432_bank = bank->driver_priv;
@@ -542,16 +539,13 @@ COMMAND_HANDLER(msp432_bsl_command)
 		return ERROR_OK;
 	}
 
-	if (2 == CMD_ARGC) {
-		if (0 == strcmp(CMD_ARGV[1], "lock"))
+	if (1 == CMD_ARGC) {
+		if (0 == strcmp(CMD_ARGV[0], "lock"))
 			msp432_bank->unlock_bsl = false;
-		else if (0 == strcmp(CMD_ARGV[1], "unlock"))
+		else if (0 == strcmp(CMD_ARGV[0], "unlock"))
 			msp432_bank->unlock_bsl = true;
 		else
 			return ERROR_COMMAND_SYNTAX_ERROR;
-	} else if (1 != CMD_ARGC) {
-		/* Extra, unknown argument passed in */
-		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	LOG_INFO("msp432: BSL flash region is currently %slocked",
@@ -567,7 +561,6 @@ FLASH_BANK_COMMAND_HANDLER(msp432_flash_bank_command)
 	if (CMD_ARGC < 6)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	/* Create shared private struct for flash banks */
 	msp432_bank = malloc(sizeof(struct msp432_bank));
 	if (NULL == msp432_bank)
 		return ERROR_FAIL;
@@ -578,14 +571,14 @@ FLASH_BANK_COMMAND_HANDLER(msp432_flash_bank_command)
 	msp432_bank->family_type = MSP432_NO_FAMILY;
 	msp432_bank->device_type = MSP432_NO_TYPE;
 	msp432_bank->sector_length = 0x1000;
-	msp432_bank->probed_main = false;
-	msp432_bank->probed_info = false;
+	msp432_bank->probed[0] = false;
+	msp432_bank->probed[1] = false;
 	msp432_bank->unlock_bsl = false;
 	msp432_bank->working_area = NULL;
 
-	/* Finish up initial settings here */
+	/* Finish initialization of bank 0 (main flash) */
 	bank->driver_priv = msp432_bank;
-	bank->base = FLASH_BASE;
+	bank->next = NULL;
 
 	return ERROR_OK;
 }
@@ -596,9 +589,6 @@ static int msp432_erase(struct flash_bank *bank, int first, int last)
 	struct msp432_bank *msp432_bank = bank->driver_priv;
 	struct msp432_algo_params algo_params;
 
-	bool is_main = FLASH_BASE == bank->base;
-	bool is_info = P4_FLASH_INFO_BASE == bank->base;
-
 	int retval;
 
 	if (TARGET_HALTED != target->state) {
@@ -607,7 +597,8 @@ static int msp432_erase(struct flash_bank *bank, int first, int last)
 	}
 
 	/* Do a mass erase if user requested all sectors of main flash */
-	if (is_main && (first == 0) && (last == (bank->num_sectors - 1))) {
+	if ((0 == bank->bank_number) && (first == 0) &&
+		(last == (bank->num_sectors - 1))) {
 		/* Request mass erase of main flash */
 		return msp432_mass_erase(bank, false);
 	}
@@ -620,7 +611,7 @@ static int msp432_erase(struct flash_bank *bank, int first, int last)
 	msp432_init_params(&algo_params);
 
 	/* Adjust params if this is the info bank */
-	if (is_info) {
+	if (1 == bank->bank_number) {
 		buf_set_u32(algo_params.erase_param, 0, 32, FLASH_ERASE_INFO);
 		/* And flag if BSL is unlocked */
 		if (msp432_bank->unlock_bsl)
@@ -631,11 +622,11 @@ static int msp432_erase(struct flash_bank *bank, int first, int last)
 	for (int i = first; i <= last; i++) {
 
 		/* Skip TVL (read-only) sector of the info bank */
-		if (is_info && 1 == i)
+		if (1 == bank->bank_number && 1 == i)
 			continue;
 
 		/* Skip BSL sectors of info bank if locked */
-		if (is_info && (2 == i || 3 == i) &&
+		if (1 == bank->bank_number && (2 == i || 3 == i) &&
 			!msp432_bank->unlock_bsl)
 			continue;
 
@@ -675,8 +666,6 @@ static int msp432_write(struct flash_bank *bank, const uint8_t *buffer,
 	long long start_ms;
 	long long elapsed_ms;
 
-	bool is_info = P4_FLASH_INFO_BASE == bank->base;
-
 	int retval;
 
 	if (TARGET_HALTED != target->state) {
@@ -690,7 +679,7 @@ static int msp432_write(struct flash_bank *bank, const uint8_t *buffer,
 	 * The BSL region in sectors 2 and 3 of the info flash may be unlocked
 	 * The helper algorithm will hang on attempts to write to TVL
 	 */
-	if (is_info) {
+	if (1 == bank->bank_number) {
 		/* Set read-only start to TVL sector */
 		uint32_t start = 0x1000;
 		/* Set read-only end after BSL region if locked */
@@ -733,7 +722,7 @@ static int msp432_write(struct flash_bank *bank, const uint8_t *buffer,
 	buf_set_u32(algo_params.length, 0, 32, count);
 
 	/* Check if this is the info bank */
-	if (is_info) {
+	if (1 == bank->bank_number) {
 		/* And flag if BSL is unlocked */
 		if (msp432_bank->unlock_bsl)
 			buf_set_u32(algo_params.unlock_bsl, 0, 32, FLASH_UNLOCK_BSL);
@@ -764,8 +753,8 @@ static int msp432_write(struct flash_bank *bank, const uint8_t *buffer,
 		}
 
 		/* Signal the flash helper algorithm that data is ready to flash */
-		retval = target_write_u32(target, ALGO_BUFFER1_STATUS_ADDR,
-					data_ready);
+		retval = target_write_buffer(target, ALGO_BUFFER1_STATUS_ADDR,
+					sizeof(data_ready), (uint8_t *)&data_ready);
 		if (ERROR_OK != retval) {
 			(void)msp432_quit(bank);
 			return ERROR_FLASH_OPERATION_FAILED;
@@ -804,23 +793,20 @@ static int msp432_probe(struct flash_bank *bank)
 	struct target *target = bank->target;
 	struct msp432_bank *msp432_bank = bank->driver_priv;
 
+	char *name;
+
 	uint32_t device_id;
 	uint32_t hardware_rev;
 
+	uint32_t base;
 	uint32_t sector_length;
 	uint32_t size;
 	int num_sectors;
-
-	bool is_main = FLASH_BASE == bank->base;
-	bool is_info = P4_FLASH_INFO_BASE == bank->base;
+	int bank_id;
 
 	int retval;
 
-	/* Check if this bank has already been successfully probed */
-	if (is_main && msp432_bank->probed_main)
-		return ERROR_OK;
-	if (is_info && msp432_bank->probed_info)
-		return ERROR_OK;
+	bank_id = bank->bank_number;
 
 	/* Read the flash size register to determine this is a P4 or not */
 	/* MSP432P4s will return the size of flash.  MSP432E4s will return zero */
@@ -863,16 +849,63 @@ static int msp432_probe(struct flash_bank *bank)
 	msp432_bank->device_type = msp432_device_type(msp432_bank->family_type,
 		msp432_bank->device_id, msp432_bank->hardware_rev);
 
+	/* If not already allocated, create the info bank for MSP432P4 */
+	/* We could not determine it was needed until device was probed */
+	if (MSP432P4 == msp432_bank->family_type) {
+		/* If we've been given bank 1, then this was already done */
+		if (0 == bank_id) {
+			/* And only allocate it if it doesn't exist yet */
+			if (NULL == bank->next) {
+				struct flash_bank *info_bank;
+				info_bank = malloc(sizeof(struct flash_bank));
+				if (NULL == info_bank)
+					return ERROR_FAIL;
+
+				name = malloc(strlen(bank->name)+1);
+				if (NULL == name) {
+					free(info_bank);
+					return ERROR_FAIL;
+				}
+				strcpy(name, bank->name);
+
+				/* Initialize bank 1 (info region) */
+				info_bank->name = name;
+				info_bank->target = bank->target;
+				info_bank->driver = bank->driver;
+				info_bank->driver_priv = bank->driver_priv;
+				info_bank->bank_number = 1;
+				info_bank->base = 0x00200000;
+				info_bank->size = 0;
+				info_bank->chip_width = 0;
+				info_bank->bus_width = 0;
+				info_bank->erased_value = 0xff;
+				info_bank->default_padded_value = 0xff;
+				info_bank->write_start_alignment = 0;
+				info_bank->write_end_alignment = 0;
+				info_bank->minimal_write_gap = FLASH_WRITE_GAP_SECTOR;
+				info_bank->num_sectors = 0;
+				info_bank->sectors = NULL;
+				info_bank->num_prot_blocks = 0;
+				info_bank->prot_blocks = NULL;
+				info_bank->next = NULL;
+
+				/* Enable the new bank */
+				bank->next = info_bank;
+			}
+		}
+	}
+
 	if (MSP432P4 == msp432_bank->family_type) {
 		/* Set up MSP432P4 specific flash parameters */
-		if (is_main) {
+		if (0 == bank_id) {
 			retval = target_read_u32(target, P4_FLASH_MAIN_SIZE_REG, &size);
 			if (ERROR_OK != retval)
 				return retval;
 
+			base = P4_FLASH_MAIN_BASE;
 			sector_length = P4_SECTOR_LENGTH;
 			num_sectors = size / sector_length;
-		} else if (is_info) {
+		} else if (1 == bank_id) {
 			if (msp432_bank->device_type == MSP432P411X ||
 				msp432_bank->device_type == MSP432P411X_GUESS) {
 				/* MSP432P411x has an info size register, use that for size */
@@ -883,22 +916,19 @@ static int msp432_probe(struct flash_bank *bank)
 				/* All other MSP432P401x devices have fixed info region size */
 				size = 0x4000; /* 16 KB info region */
 			}
+			base = P4_FLASH_INFO_BASE;
 			sector_length = P4_SECTOR_LENGTH;
 			num_sectors = size / sector_length;
 		} else {
-			/* Invalid bank somehow */
+			/* Invalid bank number somehow */
 			return ERROR_FAIL;
 		}
 	} else {
 		/* Set up MSP432E4 specific flash parameters */
-		if (is_main) {
-			size = E4_FLASH_SIZE;
-			sector_length = E4_SECTOR_LENGTH;
-			num_sectors = size / sector_length;
-		} else {
-			/* Invalid bank somehow */
-			return ERROR_FAIL;
-		}
+		base = E4_FLASH_BASE;
+		size = E4_FLASH_SIZE;
+		sector_length = E4_SECTOR_LENGTH;
+		num_sectors = size / sector_length;
 	}
 
 	if (NULL != bank->sectors) {
@@ -906,12 +936,11 @@ static int msp432_probe(struct flash_bank *bank)
 		bank->sectors = NULL;
 	}
 
-	if (num_sectors > 0) {
-		bank->sectors = malloc(sizeof(struct flash_sector) * num_sectors);
-		if (NULL == bank->sectors)
-			return ERROR_FAIL;
-	}
+	bank->sectors = malloc(sizeof(struct flash_sector) * num_sectors);
+	if (NULL == bank->sectors)
+		return ERROR_FAIL;
 
+	bank->base = base;
 	bank->size = size;
 	bank->write_start_alignment = 0;
 	bank->write_end_alignment = 0;
@@ -926,31 +955,7 @@ static int msp432_probe(struct flash_bank *bank)
 	}
 
 	/* We've successfully determined the stats on this flash bank */
-	if (is_main)
-		msp432_bank->probed_main = true;
-	if (is_info)
-		msp432_bank->probed_info = true;
-
-	if (is_main && MSP432P4 == msp432_bank->family_type) {
-		/* Create the info flash bank needed by MSP432P4 variants */
-		struct flash_bank *info = calloc(sizeof(struct flash_bank), 1);
-		if (NULL == info)
-			return ERROR_FAIL;
-
-		/* Create a name for the info bank, append "_1" to main name */
-		char *name = malloc(strlen(bank->name) + 3);
-		strcpy(name, bank->name);
-		strcat(name, "_1");
-
-		/* Initialize info bank */
-		info->name = name;
-		info->target = bank->target;
-		info->driver = bank->driver;
-		info->driver_priv = msp432_bank;
-		info->base = P4_FLASH_INFO_BASE;
-
-		flash_bank_add(info);
-	}
+	msp432_bank->probed[bank_id] = true;
 
 	/* If we fall through to here, then all went well */
 
@@ -961,17 +966,15 @@ static int msp432_auto_probe(struct flash_bank *bank)
 {
 	struct msp432_bank *msp432_bank = bank->driver_priv;
 
-	bool is_main = FLASH_BASE == bank->base;
-	bool is_info = P4_FLASH_INFO_BASE == bank->base;
-
 	int retval = ERROR_OK;
 
-	if (is_main)
-		if (!msp432_bank->probed_main)
-			retval = msp432_probe(bank);
-	if (is_info)
-		if (!msp432_bank->probed_info)
-			retval = msp432_probe(bank);
+	if (bank->bank_number < 0 || bank->bank_number > 1) {
+		/* Invalid bank number somehow */
+		return ERROR_FAIL;
+	}
+
+	if (!msp432_bank->probed[bank->bank_number])
+		retval = msp432_probe(bank);
 
 	return retval;
 }
@@ -1033,21 +1036,12 @@ static int msp432_info(struct flash_bank *bank, char *buf, int buf_size)
 	return ERROR_OK;
 }
 
-static int msp432_protect_check(struct flash_bank *bank)
-{
-	/* Added to suppress warning, not needed for MSP432 flash */
-	return ERROR_OK;
-}
-
 static void msp432_flash_free_driver_priv(struct flash_bank *bank)
 {
-	bool is_main = FLASH_BASE == bank->base;
-
 	/* A single private struct is shared between main and info banks */
-	/* Only free it on the call for main bank */
-	if (is_main && (NULL != bank->driver_priv))
+	/* Only free it on the call for main bank (#0) */
+	if ((0 == bank->bank_number) && (NULL != bank->driver_priv))
 		free(bank->driver_priv);
-
 	/* Forget about the private struct on both main and info banks */
 	bank->driver_priv = NULL;
 }
@@ -1058,14 +1052,14 @@ static const struct command_registration msp432_exec_command_handlers[] = {
 		.handler = msp432_mass_erase_command,
 		.mode = COMMAND_EXEC,
 		.help = "Erase entire flash memory on device.",
-		.usage = "bank_id ['main' | 'all']",
+		.usage = "['main' | 'all']",
 	},
 	{
 		.name = "bsl",
 		.handler = msp432_bsl_command,
 		.mode = COMMAND_EXEC,
 		.help = "Allow BSL to be erased or written by flash commands.",
-		.usage = "bank_id ['unlock' | 'lock']",
+		.usage = "['unlock' | 'lock']",
 	},
 	COMMAND_REGISTRATION_DONE
 };
@@ -1091,7 +1085,6 @@ const struct flash_driver msp432_flash = {
 	.probe = msp432_probe,
 	.auto_probe = msp432_auto_probe,
 	.erase_check = default_flash_blank_check,
-	.protect_check = msp432_protect_check,
 	.info = msp432_info,
 	.free_driver_priv = msp432_flash_free_driver_priv,
 };

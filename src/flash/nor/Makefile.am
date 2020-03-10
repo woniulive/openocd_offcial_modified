@@ -8,6 +8,7 @@ noinst_LTLIBRARIES += %D%/libocdflashnor.la
 
 NOR_DRIVERS = \
 	%D%/aduc702x.c \
+	%D%/aducm302x.c \
 	%D%/aducm360.c \
 	%D%/ambiqmicro.c \
 	%D%/at91sam4.c \
@@ -62,6 +63,7 @@ NOR_DRIVERS = \
 	%D%/stm32lx.c \
 	%D%/stm32l4x.c \
 	%D%/stm32h7x.c \
+	%D%/stm32g0x.c \
 	%D%/str7x.c \
 	%D%/str9x.c \
 	%D%/str9xpec.c \
@@ -71,12 +73,14 @@ NOR_DRIVERS = \
 	%D%/w600.c \
 	%D%/xcf.c \
 	%D%/xmc1xxx.c \
-	%D%/xmc4xxx.c
-
+	%D%/xmc4xxx.c \
+	%D%/stm32g4x.c \
+	%D%/stm32l5x.c \
+	%D%/msp432p4.c
+	
 NORHEADERS = \
 	%D%/core.h \
 	%D%/cc3220sf.h \
-	%D%/bluenrg-x.h \
 	%D%/cc26xx.h \
 	%D%/cfi.h \
 	%D%/driver.h \
@@ -84,4 +88,5 @@ NORHEADERS = \
 	%D%/non_cfi.h \
 	%D%/ocl.h \
 	%D%/spi.h \
-	%D%/msp432.h
+	%D%/msp432.h \
+	%D%/msp432p4.h 

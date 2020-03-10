@@ -36,7 +36,7 @@
 /* ADuCM302x cache flash control registers */
 #define STAT			0x40018000
 #define IEN				0x40018004
-#define CMD				0x40018008
+#define CMD_ADUCM302X			0x40018008
 #define KH_ADDR			0x4001800c
 #define KH_DATA0		0x40018010
 #define KH_DATA1		0x40018014
@@ -221,7 +221,7 @@ static int aducm302x_mass_erase(struct flash_bank *bank)
 	/* Write user key */
 	target_write_u32(target, KEY, USER_KEY);
 	/* Write massive erase command */
-	target_write_u32(target, CMD, CMD_MASSERASE);
+	target_write_u32(target, CMD_ADUCM302X, CMD_MASSERASE);
 
 	retval = aducm302x_check_cmdfail(target);
 	if (retval != ERROR_OK)
@@ -260,7 +260,7 @@ static int aducm302x_erase(struct flash_bank *bank, int first, int last)
 		/* Write user key */
 		target_write_u32(target, KEY, USER_KEY);
 		/* Write page erase command */
-		target_write_u32(target, CMD, CMD_ERASEPAGE);
+		target_write_u32(target, CMD_ADUCM302X, CMD_ERASEPAGE);
 
 		retval = aducm302x_check_cmdfail(target);
 		if (retval != ERROR_OK)
@@ -489,7 +489,7 @@ static int aducm302x_write(struct flash_bank *bank, const uint8_t *buffer,
 		target_write_u32(target, KH_ADDR, address);
 		target_write_buffer(target, KH_DATA0, 4, buffer);
 		target_write_buffer(target, KH_DATA1, 4, buffer + 4);
-		target_write_u32(target, CMD, CMD_WRITE);
+		target_write_u32(target, CMD_ADUCM302X, CMD_WRITE);
 
 		retval = aducm302x_check_cmdfail(target);
 		if (retval != ERROR_OK)

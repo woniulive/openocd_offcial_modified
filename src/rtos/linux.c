@@ -725,7 +725,6 @@ int linux_get_tasks(struct target *target, int context)
 
 		/*  check that this thread is not one the current threads already
 		 *  created */
-		uint32_t base_addr;
 #ifdef PID_CHECK
 
 		if (!current_pid(linux_os, t->pid)) {
@@ -746,13 +745,12 @@ int linux_get_tasks(struct target *target, int context)
 				t->context =
 					cpu_context_read(target, t->base_addr,
 						&t->thread_info_addr);
-			base_addr = next_task(target, t);
 		} else {
 			/*LOG_INFO("thread %s is a current thread already created",t->name); */
-			base_addr = next_task(target, t);
 			free(t);
 		}
 
+		uint32_t base_addr = next_task(target, t);
 		t = calloc(1, sizeof(struct threads));
 		t->base_addr = base_addr;
 	}
@@ -1180,7 +1178,7 @@ int linux_gdb_T_packet(struct connection *connection,
 
 	if (linux_os->threads_needs_update == 0) {
 		struct threads *temp = linux_os->thread_list;
-		struct threads *prev = NULL;
+		struct threads *prev = linux_os->thread_list;
 
 		while (temp != NULL) {
 			if (temp->threadid == threadid) {

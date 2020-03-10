@@ -975,6 +975,7 @@ COMMAND_HANDLER(stm32x_handle_options_read_command)
 	command_print(CMD, "standby mode: %sreset generated upon entry",
 			options.rst_stdby ? "no " : "");
 
+	(void)stm32x_info;
 	return ERROR_OK;
 }
 

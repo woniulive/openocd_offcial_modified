@@ -1000,7 +1000,7 @@ static int gdb_new_connection(struct connection *connection)
 		for (i = 0; i < flash_get_bank_count(); i++) {
 			struct flash_bank *p;
 			p = get_flash_bank_by_num_noprobe(i);
-			if (p->target != target)
+			if (!target->amp && p->target != target)
 				continue;
 			retval = get_flash_bank_by_num(i, &p);
 			if (retval != ERROR_OK) {
@@ -1119,7 +1119,7 @@ static inline int gdb_reg_pos(struct target *target, int pos, int len)
  * The format of reg->value is little endian
  *
  */
-static void gdb_str_to_target(struct target *target,
+void gdb_str_to_target(struct target *target,
 		char *tstr, struct reg *reg)
 {
 	int i;
@@ -1626,6 +1626,22 @@ static int gdb_step_continue_packet(struct connection *connection,
 		address = strtoull(packet + 1, NULL, 16);
 	else
 		current = 1;
+    
+    if (target->frozen && target->smp && target->head)
+    {
+        for (struct target_list *pLst = target->head; pLst; pLst = pLst->next)
+        {
+            struct target *pThisTarget = pLst->target;
+            if (!pThisTarget)
+                continue;
+            if (!pThisTarget->frozen)
+            {
+                target = pThisTarget;
+                break;
+            }
+        }
+
+    }
 
 	gdb_running_type = packet[0];
 	if (packet[0] == 'c') {
@@ -3055,9 +3071,13 @@ static int gdb_v_packet(struct connection *connection,
 		 * end to be "block" aligned ... if padding is ever needed,
 		 * GDB will have become dangerously confused.
 		 */
-		result = flash_erase_address_range(target, false, addr,
-			length);
-
+    	if (get_target_from_connection(connection)->report_flash_progress)
+    	{
+        	LOG_INFO("Erasing FLASH: 0x%08x-0x%08x...", (uint32_t)addr, (uint32_t)(addr + length));
+    	}
+    	
+		result = flash_erase_address_range(target,
+				false, addr, length);
 		/* perform any target specific operations after the erase */
 		target_call_event_callbacks(target,
 			TARGET_EVENT_GDB_FLASH_ERASE_END);

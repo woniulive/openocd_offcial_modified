@@ -278,7 +278,7 @@ int get_flash_bank_by_addr(struct target *target,
 
 	/* cycle through bank list */
 	for (c = flash_banks; c; c = c->next) {
-		if (c->target != target)
+		if (!target->amp && c->target != target)
 			continue;
 
 		int retval;
@@ -726,10 +726,18 @@ int flash_write_unlock(struct target *target, struct image *image,
 	 * whereas an image can have sections out of order. */
 	struct imagesection **sections = malloc(sizeof(struct imagesection *) *
 			image->num_sections);
-	int i;
-	for (i = 0; i < image->num_sections; i++)
-		sections[i] = &image->sections[i];
+	int i, total_size = 0;
+    for (i = 0; i < image->num_sections; i++)
+    {
+        sections[i] = &image->sections[i];
+        total_size += sections[i]->size;
+    }
 
+    if (target->report_flash_progress)
+    {
+        LOG_INFO("Programming FLASH (%d sections, %d bytes)...", image->num_sections, total_size);
+    }
+        
 	qsort(sections, image->num_sections, sizeof(struct imagesection *),
 		compare_section);
 
@@ -741,7 +749,12 @@ int flash_write_unlock(struct target *target, struct image *image,
 		target_addr_t run_address = sections[section]->base_address + section_offset;
 		uint32_t run_size = sections[section]->size - section_offset;
 		int pad_bytes = 0;
-
+    	
+    	if (!section_offset && target->report_flash_progress)
+    	{
+        	LOG_INFO("Programming FLASH section %d/%d (%d bytes) at 0x%08x...", section + 1, image->num_sections, sections[section]->size, (unsigned int)sections[section]->base_address);
+    	}
+    	
 		if (sections[section]->size ==  0) {
 			LOG_WARNING("empty section %d", section);
 			section++;

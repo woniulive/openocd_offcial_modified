@@ -1548,6 +1548,7 @@ static int numicro_write(struct flash_bank *bank, const uint8_t *buffer,
 {
 	struct target *target = bank->target;
 	uint32_t timeout, status;
+	uint8_t *new_buffer = NULL;
 	int retval = ERROR_OK;
 
 	if (target->state != TARGET_HALTED) {
@@ -1565,8 +1566,20 @@ static int numicro_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (retval != ERROR_OK)
 		return retval;
 
-	assert(offset % 4 == 0);
-	assert(count % 4 == 0);
+	if (count & 0x3) {
+		uint32_t old_count = count;
+		count = (old_count | 3) + 1;
+		new_buffer = malloc(count);
+		if (new_buffer == NULL) {
+			LOG_ERROR("odd number of bytes to write and no memory "
+				"for padding buffer");
+			return ERROR_FAIL;
+		}
+		LOG_INFO("odd number of bytes to write (%d), extending to %d "
+			"and padding with 0xff", old_count, count);
+		memset(new_buffer, 0xff, count);
+		buffer = memcpy(new_buffer, buffer, old_count);
+	}
 
 	uint32_t words_remaining = count / 4;
 
@@ -1584,10 +1597,13 @@ static int numicro_write(struct flash_bank *bank, const uint8_t *buffer,
 
 			LOG_DEBUG("write longword @ %08X", offset + i);
 
+			uint8_t padding[4] = {0xff, 0xff, 0xff, 0xff};
+			memcpy(padding, buffer + i, MIN(4, count-i));
+
 			retval = target_write_u32(target, NUMICRO_FLASH_ISPADR, bank->base + offset + i);
 			if (retval != ERROR_OK)
 				return retval;
-			retval = target_write_memory(target, NUMICRO_FLASH_ISPDAT, 4, 1, buffer + i);
+			retval = target_write_memory(target, NUMICRO_FLASH_ISPDAT, 4, 1, padding);
 			if (retval != ERROR_OK)
 				return retval;
 			retval = target_write_u32(target, NUMICRO_FLASH_ISPTRG, ISPTRG_ISPGO);

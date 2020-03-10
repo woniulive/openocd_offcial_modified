@@ -65,6 +65,7 @@ struct aarch64_common {
 	struct armv8_common armv8_common;
 
 	enum aarch64_isrmasking_mode isrmasking_mode;
+    int mmu_ever_disabled;
 };
 
 static inline struct aarch64_common *

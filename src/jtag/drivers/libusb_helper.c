@@ -123,6 +123,13 @@ static bool string_descriptor_equal(libusb_device_handle *device, uint8_t str_in
 	return matched;
 }
 
+struct matched_dev
+{
+    int index;
+    int vid, pid;
+    uint8_t serial[512];
+};
+
 int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 		const char *serial,
 		struct libusb_device_handle **out)
@@ -132,22 +139,40 @@ int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 	bool serial_mismatch = false;
 	struct libusb_device_handle *libusb_handle = NULL;
 
-	if (libusb_init(&jtag_libusb_context) < 0)
+	errCode = libusb_init(&jtag_libusb_context);
+	if (errCode < 0)
+	{
+		LOG_ERROR("libusb_init() failed with %s",
+				  libusb_error_name(errCode));
 		return ERROR_FAIL;
+	}
 
 	cnt = libusb_get_device_list(jtag_libusb_context, &devs);
+	LOG_DEBUG("libusb reported %d devices", cnt);
+
+	struct matched_dev *matching_devs = calloc(cnt, sizeof(struct matched_dev));
+    int num_matching_devs = 0;
 
 	for (idx = 0; idx < cnt; idx++) {
 		struct libusb_device_descriptor dev_desc;
 
 		if (libusb_get_device_descriptor(devs[idx], &dev_desc) != 0)
+		{
+			LOG_DEBUG("Could not get device descriptor for device #%d", idx);
 			continue;
+		}
 
 		if (!jtag_libusb_match(&dev_desc, vids, pids))
+		{
+			LOG_DEBUG("USB descriptor mismatch for device #%d (%04x/%04x)", idx, dev_desc.idVendor, dev_desc.idProduct);
 			continue;
+		}
 
 		if (jtag_usb_get_location() && !jtag_libusb_location_equal(devs[idx]))
+		{
+			LOG_DEBUG("Unexpected device location for device %d", idx);
 			continue;
+		}
 
 		errCode = libusb_open(devs[idx], &libusb_handle);
 
@@ -164,13 +189,45 @@ int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 			libusb_close(libusb_handle);
 			continue;
 		}
+    	
+    	struct matched_dev dev = { .index = idx, .vid = dev_desc.idVendor, .pid = dev_desc.idProduct };
 
-		/* Success. */
-		*out = libusb_handle;
-		retval = ERROR_OK;
-		serial_mismatch = false;
-		break;
-	}
+    	if (dev_desc.iSerialNumber)
+        	libusb_get_string_descriptor_ascii(libusb_handle, dev_desc.iSerialNumber, dev.serial,sizeof(dev.serial)-1);
+    	
+    	matching_devs[num_matching_devs++] = dev;
+    	libusb_close(libusb_handle);
+    }
+    
+    if (num_matching_devs > 0)
+    {
+        if (num_matching_devs > 1)
+        {
+            LOG_WARNING("*********************************************************");
+            LOG_WARNING("Found multiple matching USB devices:");
+            LOG_WARNING("VID    | PID     | Serial number");
+            for (int i = 0; i < num_matching_devs; i++)
+                LOG_WARNING("%04x   | %04x    | %s", matching_devs[i].vid, matching_devs[i].pid, matching_devs[i].serial);
+            LOG_WARNING("Add the following command to your interface script to select a device:");
+            LOG_WARNING("\t hla_serial    \"<serial>\" (for ST-Link)");
+            LOG_WARNING("\t jlink_serial  \"<serial>\" (for J-Link)");
+            LOG_WARNING("\t ft2232_serial \"<serial>\" (for FT2232-based devices)");
+            LOG_WARNING("Auto-selecting the first device");
+            LOG_WARNING("*********************************************************");
+        }
+        
+        errCode = libusb_open(devs[matching_devs[0].index], &libusb_handle);
+        if (errCode) 
+            LOG_ERROR("libusb_open() failed with %s", libusb_error_name(errCode));
+        else
+        {
+            *out = libusb_handle;
+			retval = ERROR_OK;
+        }
+    }
+    
+    free(matching_devs);
+    
 	if (cnt >= 0)
 		libusb_free_device_list(devs, 1);
 

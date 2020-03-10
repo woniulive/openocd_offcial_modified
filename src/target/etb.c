@@ -229,7 +229,7 @@ static int etb_read_reg_w_check(struct reg *reg,
 	fields[0].check_mask = NULL;
 
 	fields[1].num_bits = 7;
-	uint8_t temp1 = 0;
+	uint8_t temp1;
 	fields[1].out_value = &temp1;
 	buf_set_u32(&temp1, 0, 7, reg_addr);
 	fields[1].in_value = NULL;
